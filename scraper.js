@@ -1,5 +1,7 @@
 import express from "express";
 import puppeteer from "puppeteer-core";
+import { Readability } from "@mozilla/readability";
+import { JSDOM } from "jsdom";
 import cheerio from "cheerio";
 
 const router = express.Router();
@@ -8,54 +10,47 @@ const AUTH = `${process.env.BRIGHT_DATA_USERNAME}:${process.env.BRIGHT_DATA_PASS
 const SBR_WS_ENDPOINT = `wss://${AUTH}@brd.superproxy.io:9222`;
 
 router.get("/", async (req, res) => {
-  const SBR_WS_ENDPOINT = `wss://${AUTH}@brd.superproxy.io:9222`;
+  let browser;
 
   try {
     console.log("Connecting to Scraping Browser...");
-    const browser = await puppeteer.connect({
+    browser = await puppeteer.connect({
       browserWSEndpoint: SBR_WS_ENDPOINT,
     });
 
     console.log("Connected! Navigating...");
     const page = await browser.newPage();
-    await page.goto("https://openai.com/", { timeout: 2 * 60 * 1000 }); // Replace with your target URL
-    console.log("Taking screenshot to page.png");
-    // pass this screenshot to gpt vision
-    await page.screenshot({ path: "./page.png", fullPage: true });
-    console.log("Navigated! Scraping page content...");
-    const html = await page.content();
-    // Load the HTML content into Cheerio
-    const $ = cheerio.load(html);
+    await page.setViewport({ width: 1280, height: 800 });
 
-    // Implement your data extraction logic with Cheerio here
-    // For example, let's say you want to extract all the headlines (h2) and paragraphs (p)
-    let data = {
-      headlines: [],
-      paragraphs: [],
-    };
+    const targetUrl =
+      "https://www.accuweather.com/en/ge/tbilisi/171705/weather-forecast/171705";
+    if (!targetUrl) {
+      return res.status(400).send("No URL provided");
+    }
 
-    $("h2").each((index, element) => {
-      data.headlines.push($(element).text().trim());
-    });
+    await page.goto(targetUrl, { waitUntil: "networkidle0" });
 
-    $("p").each((index, element) => {
-      data.paragraphs.push($(element).text().trim());
-    });
+    // Extracting broader content
+    const pageContent = await page.evaluate(() => document.body.innerText);
 
-    // Send back the extracted data as JSON
-    res.json(data);
+    // Basic post-processing to improve readability
+    const processedContent = pageContent
+      .split("\n")
+      .filter((line) => line.trim().length > 0) // Remove empty lines
+      .map((line) => {
+        // Further processing each line if needed, e.g., removing or replacing certain characters
+        return line.trim();
+      })
+      .join(". "); // Rejoin the lines
 
-    // Uncomment the below CAPTCHA handling code if needed
-    const client = await page.target().createCDPSession();
-    const { status } = await client.send("Captcha.solve", {
-      detectTimeout: 30 * 1000,
-    });
-    console.log(`Captcha solve status: ${status}`);
+    res.json({ content: processedContent });
   } catch (err) {
     console.error(err.stack || err);
     res.status(500).send("Error occurred during scraping");
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close();
+    }
   }
 });
 
